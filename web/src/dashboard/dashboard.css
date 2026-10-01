@@ -1,0 +1,1 @@
+:root { font: 16px system-ui, sans-serif; color: #17202a; background: #f5f7fa; } body { margin: 0; } main { max-width: 56rem; margin: 4rem auto; padding: 0 1.5rem; } section { background: white; border: 1px solid #dfe5ec; border-radius: .75rem; padding: 1.5rem; } dt { font-weight: 700; margin-top: 1rem; } dd { margin: .25rem 0 0; overflow-wrap: anywhere; }

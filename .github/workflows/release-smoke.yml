@@ -1,0 +1,18 @@
+name: Release smoke
+on: [workflow_dispatch, pull_request]
+jobs:
+  binary-smoke:
+    strategy:
+      matrix: { os: [macos-latest, ubuntu-latest, windows-latest] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.25' }
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.17.1 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20.19.0', cache: pnpm, cache-dependency-path: web/pnpm-lock.yaml }
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web build
+      - run: go test ./tests/integration -run TestBuiltBinaryRunsWithoutWebTooling

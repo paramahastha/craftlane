@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+web/dist/
+internal/server/assets/dist/
+bin/
+coverage/
+.env*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.tmp
+*.swp
+.craftlane/
+*.log

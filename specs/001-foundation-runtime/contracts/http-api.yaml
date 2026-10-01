@@ -1,0 +1,173 @@
+openapi: 3.1.0
+info:
+  title: Craftlane Local Runtime API
+  version: 1.0.0
+  description: Local-only API for Craftlane Foundation. Production requests are accepted only at the exact runtime origin. The server emits no permissive CORS headers.
+servers:
+  - url: http://127.0.0.1:{port}
+    variables:
+      port:
+        default: '7331'
+paths:
+  /api/v1/health:
+    get:
+      summary: Return safe runtime and dependency health
+      responses:
+        '200':
+          description: Current runtime health
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '400':
+          $ref: '#/components/responses/InvalidHost'
+  /api/v1/project:
+    get:
+      summary: Return the detected project projection
+      responses:
+        '200':
+          description: Project found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/InvalidHost'
+        '503':
+          description: Runtime has not completed project detection
+  /api/v1/events:
+    get:
+      summary: Read retained events after a project-local sequence
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            format: uint64
+          description: Last successfully applied sequence; defaults to 0.
+      responses:
+        '200':
+          description: Ordered events or a resynchronization result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, cursor]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, resync_required]
+                  cursor:
+                    type: integer
+                    minimum: 0
+                    format: uint64
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Event'
+                  snapshot:
+                    $ref: '#/components/schemas/Snapshot'
+        '400':
+          $ref: '#/components/responses/InvalidHost'
+  /api/v1/runtime/stop:
+    post:
+      summary: Request graceful shutdown of this exact runtime
+      description: Used by the local CLI only. It is a typed operation; no endpoint accepts a shell command or raw filesystem path.
+      parameters:
+        - $ref: '#/components/parameters/CraftlaneToken'
+      responses:
+        '202':
+          description: Shutdown accepted; the process will finish outstanding persistence and close.
+        '400':
+          $ref: '#/components/responses/InvalidHost'
+        '401':
+          description: Missing, malformed, expired, or invalid runtime control secret.
+        '403':
+          description: Browser request origin is not the exact runtime origin.
+components:
+  parameters:
+    CraftlaneToken:
+      name: X-Craftlane-Token
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+      description: Current per-runtime control secret. It is valid only while the matching runtime remains ready or stopping, and must never be passed in a URL.
+  responses:
+    InvalidHost:
+      description: Host is missing, malformed, or not the exact local runtime host.
+  schemas:
+    Health:
+      type: object
+      required: [status, runtime, project, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        runtime:
+          $ref: '#/components/schemas/Runtime'
+        project:
+          $ref: '#/components/schemas/Project'
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiagnosticCheck'
+    Runtime:
+      type: object
+      required: [id, origin, protocolVersion, state, startedAt]
+      properties:
+        id: { type: string }
+        origin: { type: string, format: uri }
+        protocolVersion: { type: integer, minimum: 1 }
+        state: { type: string, enum: [starting, ready, stopping, stopped, stale] }
+        startedAt: { type: string, format: date-time }
+    Project:
+      type: object
+      required: [id, name, root]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        root: { type: string }
+        capabilities:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [available, unavailable, unknown]
+    Event:
+      type: object
+      required: [schemaVersion, eventId, sequence, timestamp, projectId, source, type, payload]
+      properties:
+        schemaVersion: { type: integer, minimum: 1 }
+        eventId: { type: string }
+        sequence: { type: integer, minimum: 1, format: uint64 }
+        timestamp: { type: string, format: date-time }
+        projectId: { type: string }
+        source:
+          type: object
+          required: [name]
+          properties:
+            name: { type: string }
+            adapterVersion: { type: string }
+        type: { type: string }
+        payload: { type: object, additionalProperties: true }
+    Snapshot:
+      type: object
+      required: [sequence, project, runtime, diagnostics]
+      properties:
+        sequence: { type: integer, minimum: 0, format: uint64 }
+        project: { $ref: '#/components/schemas/Project' }
+        runtime: { $ref: '#/components/schemas/Runtime' }
+        diagnostics:
+          type: array
+          items: { $ref: '#/components/schemas/DiagnosticCheck' }
+    DiagnosticCheck:
+      type: object
+      required: [name, status, detail]
+      properties:
+        name: { type: string }
+        status: { type: string, enum: [pass, warn, fail] }
+        detail: { type: string }
+        action: { type: string }
