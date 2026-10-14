@@ -9,6 +9,8 @@ describe('Dashboard', () => {
     status: 'ok', project: { id: 'p', name: 'demo', root: '/work/demo' },
     runtime: { id: 'r', origin: 'http://127.0.0.1:7331', protocolVersion: 1, state: 'ready', startedAt: new Date().toISOString() },
     checks: [{ name: 'git', status: 'pass', detail: 'Git is available' }],
+    providerStatuses: [{ provider: 'codex', setupState: 'unavailable', detail: 'not installed', action: 'Install Codex' }],
+    agents: [{ id: 'a', provider: 'claude', projectId: 'p', displayName: 'claude agent a', state: 'waiting_permission', stateSource: 'reported', lastObservedAt: new Date().toISOString(), currentTool: { name: 'read_file', state: 'started' } }],
   }) })));
 
   it('renders labelled project, root, origin, health, and diagnostics', async () => {
@@ -17,6 +19,8 @@ describe('Dashboard', () => {
     expect(screen.getByText('/work/demo')).toBeVisible();
     expect(screen.getByText('http://127.0.0.1:7331')).toBeVisible();
     expect(screen.getByLabelText('Runtime diagnostics')).toHaveTextContent('git: pass');
+    expect(screen.getByLabelText('Provider coverage')).toHaveTextContent('codex: unavailable');
+    expect(screen.getByLabelText('Observed agents')).toHaveTextContent('waiting_permission');
     expect(screen.getByRole('status')).toHaveTextContent('connected');
   });
 });

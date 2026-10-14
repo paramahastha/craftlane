@@ -1,0 +1,7 @@
+{
+  "provider": "opencode",
+  "fixtureId": "opencode-session-001",
+  "projectRoot": "{{PROJECT_ROOT}}",
+  "credentialCanary": "AKIA1234567890ABCDEF",
+  "events": ["session.started", "tool.started", "tool.completed", "session.idle"]
+}

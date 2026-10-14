@@ -1,7 +1,5 @@
-# Local runtime security
+# Local observation security
 
-The runtime accepts only its exact `127.0.0.1:<port>` Host. State-changing
-requests require `X-Craftlane-Token` from the current runtime and reject a
-different browser Origin. Secret-like keys and credential-shaped values are
-redacted recursively before event storage or presentation. No generic shell
-or arbitrary filesystem endpoint is exposed.
+Observation uses a distinct owner-only token stored with the project runtime state. Callback requests must use the exact runtime Host, no Origin or the exact runtime Origin, a supported provider path, a bounded JSON body, and the observation token. Project identity is checked before the reducer can mutate state.
+
+Provider setup is explicit and reversible. Claude settings and Codex hooks are structurally merged around Craftlane markers; OpenCode uses one owned generated plugin. Codex and OpenCode artifacts may be tracked, so setup warns without changing ignore rules. Normalized state is redacted and bounded; raw provider payloads are never persisted or sent to the browser.

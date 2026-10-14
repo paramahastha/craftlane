@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/craftlane/craftlane/internal/events"
 	"github.com/craftlane/craftlane/internal/protocol"
+	"github.com/craftlane/craftlane/internal/providers"
 	"github.com/craftlane/craftlane/internal/security"
 	"io/fs"
 	"net/http"
@@ -10,14 +11,16 @@ import (
 )
 
 type Server struct {
-	Project        protocol.Project
-	Runtime        protocol.Runtime
-	Reducer        *events.Reducer
-	Checks         []protocol.DiagnosticCheck
-	ExpectedHost   string
-	ExpectedOrigin string
-	Token          string
-	Stop           func()
+	Project          protocol.Project
+	Runtime          protocol.Runtime
+	Reducer          *events.Reducer
+	Checks           []protocol.DiagnosticCheck
+	ExpectedHost     string
+	ExpectedOrigin   string
+	Token            string
+	ObservationToken string
+	Registry         *providers.Registry
+	Stop             func()
 }
 
 func New(p protocol.Project, r protocol.Runtime, token string) *Server {
@@ -30,6 +33,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/events", s.eventsHTTP)
 	mux.HandleFunc("/ws", s.websocket)
 	mux.HandleFunc("/api/v1/runtime/stop", s.stop)
+	mux.HandleFunc("/api/v1/observe/", s.observe)
 	sub, _ := fs.Sub(assetFS, "assets/dist")
 	static := http.FileServer(http.FS(sub))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

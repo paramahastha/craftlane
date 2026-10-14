@@ -1,0 +1,7 @@
+{
+  "provider": "claude",
+  "fixtureId": "claude-session-001",
+  "projectRoot": "{{PROJECT_ROOT}}",
+  "credentialCanary": "sk-claude-fixture-only",
+  "events": ["session.started", "tool.started", "permission.requested", "session.completed"]
+}

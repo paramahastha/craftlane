@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/craftlane/craftlane/internal/app"
 	"github.com/craftlane/craftlane/internal/diagnostics"
 	"github.com/craftlane/craftlane/internal/project"
+	"github.com/craftlane/craftlane/internal/providers"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -40,6 +43,8 @@ func run(args []string) error {
 		}
 		fmt.Printf("Craftlane ready: %s\n", record.Origin)
 		return nil
+	case "observe":
+		return runObserve(ctx, args)
 	case "serve":
 		flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 		root := flags.String("root", ".", "project root")
@@ -108,5 +113,56 @@ func run(args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", command)
+	}
+}
+
+func runObserve(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: craftlane observe status|setup|remove|bridge")
+	}
+	p, err := project.Detect(ctx, ".")
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "status":
+		for _, status := range app.ObserveStatus(p) {
+			b, _ := json.Marshal(status)
+			fmt.Println(string(b))
+		}
+		return nil
+	case "setup", "remove":
+		if len(args) < 2 {
+			return fmt.Errorf("provider is required")
+		}
+		flags := flag.NewFlagSet("observe "+args[0], flag.ContinueOnError)
+		confirm := flags.Bool("confirm", false, "apply the displayed provider-scoped change")
+		provider := args[1]
+		if err := flags.Parse(args[2:]); err != nil {
+			return err
+		}
+		var result providers.SetupResult
+		if args[0] == "setup" {
+			result, err = app.ObserveSetup(p, provider, *confirm)
+		} else {
+			result, err = app.ObserveRemove(p, provider, *confirm)
+		}
+		if err != nil {
+			return err
+		}
+		app.PrintSetupResult(os.Stdout, result)
+		return nil
+	case "bridge":
+		flags := flag.NewFlagSet("observe bridge", flag.ContinueOnError)
+		provider := flags.String("provider", "", "provider identifier")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*provider) == "" {
+			return fmt.Errorf("--provider is required")
+		}
+		return app.ObserveBridge(ctx, p, *provider, os.Stdin)
+	default:
+		return fmt.Errorf("unknown observe command %q", args[0])
 	}
 }

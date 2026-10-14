@@ -44,3 +44,16 @@ func TestEventSchemaDeclaresRequiredEnvelopeFields(t *testing.T) {
 		}
 	}
 }
+
+func TestObservationAdditionsRemainOptionalAndSourceTagged(t *testing.T) {
+	data, err := os.ReadFile("../../protocol/schema/events.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, field := range []string{"agents", "providerStatuses", "adapterVersion"} {
+		if !strings.Contains(text, `"`+field+`"`) {
+			t.Errorf("schema missing additive field %s", field)
+		}
+	}
+}

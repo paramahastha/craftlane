@@ -120,7 +120,7 @@ func OpenProject(ctx context.Context, p protocol.Project) error {
 
 func Doctor(ctx context.Context, p protocol.Project) ([]protocol.DiagnosticCheck, bool) {
 	_, live, _ := RuntimeStatus(ctx, p)
-	checks := diagnostics.Detect(p.Root, live, server.AssetReady())
+	checks := diagnostics.DetectWithRegistry(p.Root, live, server.AssetReady(), NewProviderRegistry(p.Root))
 	ok := true
 	for _, check := range checks {
 		if check.Status == "fail" {

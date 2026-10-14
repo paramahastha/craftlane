@@ -34,7 +34,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	jsonWrite(w, protocol.Health{Status: status, Runtime: s.Runtime, Project: s.Project, Checks: s.Checks})
+	snapshot := protocol.Snapshot{}
+	if s.Reducer != nil {
+		snapshot = s.Reducer.Snapshot()
+	}
+	jsonWrite(w, protocol.Health{Status: status, Runtime: s.Runtime, Project: s.Project, Checks: s.Checks, Agents: snapshot.Agents, ProviderStatuses: snapshot.ProviderStatuses})
 }
 
 func (s *Server) project(w http.ResponseWriter, r *http.Request) {

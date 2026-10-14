@@ -1,1 +1,17 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"craftlane.events.v1","type":"object","required":["schemaVersion","eventId","sequence","timestamp","projectId","source","type","payload"]}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {"type": "integer"},
+    "eventId": {"type": "string"},
+    "sequence": {"type": "integer"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "projectId": {"type": "string"},
+    "type": {"type": "string"},
+    "source": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "adapterVersion": {"type": "string"}}},
+    "payload": {"type": "object"},
+    "agents": {"type": "array"},
+    "providerStatuses": {"type": "array"}
+  },
+  "required": ["schemaVersion", "eventId", "sequence", "projectId", "source", "type", "payload"]
+}

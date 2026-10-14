@@ -7,26 +7,30 @@ import (
 	"github.com/craftlane/craftlane/internal/events"
 	"github.com/craftlane/craftlane/internal/project"
 	"github.com/craftlane/craftlane/internal/protocol"
+	"github.com/craftlane/craftlane/internal/providers"
 	"github.com/craftlane/craftlane/internal/server"
 	"github.com/craftlane/craftlane/internal/storage"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
 
 type Runtime struct {
-	Project  protocol.Project
-	Record   protocol.RuntimeRecord
-	Store    storage.Store
-	Token    string
-	HTTP     *http.Server
-	Listener net.Listener
-	Reducer  *events.Reducer
-	done     chan struct{}
-	once     sync.Once
+	Project          protocol.Project
+	Record           protocol.RuntimeRecord
+	Store            storage.Store
+	Token            string
+	ObservationToken string
+	Registry         *providers.Registry
+	HTTP             *http.Server
+	Listener         net.Listener
+	Reducer          *events.Reducer
+	done             chan struct{}
+	once             sync.Once
 }
 
 func stateDir(p protocol.Project) (string, error) {
@@ -57,6 +61,14 @@ func StartWithID(ctx context.Context, p protocol.Project, port int, runtimeID st
 	}
 	st := storage.New(dir)
 	token := storage.RandomSecret()
+	observationToken, observationErr := st.LoadObservationSecret()
+	if os.IsNotExist(observationErr) {
+		observationToken = storage.RandomSecret()
+		observationErr = st.SaveObservationSecret(observationToken)
+	}
+	if observationErr != nil {
+		return nil, observationErr
+	}
 	ln, e := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
 	if e != nil {
 		return nil, fmt.Errorf("port %d unavailable: %w", port, e)
@@ -71,7 +83,8 @@ func StartWithID(ctx context.Context, p protocol.Project, port int, runtimeID st
 		ln.Close()
 		return nil, e
 	}
-	rt := &Runtime{Project: p, Record: rec, Store: st, Token: token, Listener: ln, done: make(chan struct{})}
+	registry := NewProviderRegistry(p.Root)
+	rt := &Runtime{Project: p, Record: rec, Store: st, Token: token, ObservationToken: observationToken, Registry: registry, Listener: ln, done: make(chan struct{})}
 	ready := false
 	defer func() {
 		if ready {
@@ -87,8 +100,11 @@ func StartWithID(ctx context.Context, p protocol.Project, port int, runtimeID st
 	}
 	pub := protocol.Runtime{ID: id, ProjectID: p.ID, Origin: origin, ProtocolVersion: 1, StartedAt: rec.StartedAt, State: "ready"}
 	reducer := events.NewReducer(st, p, pub)
+	if e = reducer.SetProviderStatuses(registry.Statuses()); e != nil {
+		return nil, e
+	}
 	previous, previousErr := st.LoadSnapshot()
-	checks := diagnostics.Detect(p.Root, true, server.AssetReady())
+	checks := diagnostics.DetectWithRegistry(p.Root, true, server.AssetReady(), registry)
 	if e = reducer.SetDiagnostics(checks); e != nil {
 		return nil, e
 	}
@@ -114,6 +130,8 @@ func StartWithID(ctx context.Context, p protocol.Project, port int, runtimeID st
 	hs := server.New(p, pub, token)
 	hs.Reducer = reducer
 	hs.Checks = checks
+	hs.ObservationToken = observationToken
+	hs.Registry = registry
 	hs.Stop = func() { _ = rt.Shutdown(context.Background()) }
 	rt.HTTP = &http.Server{Handler: hs.Handler()}
 	go func() {
@@ -131,8 +149,32 @@ func StartWithID(ctx context.Context, p protocol.Project, port int, runtimeID st
 		}
 	}()
 	go monitorProjectChanges(ctx, rt)
+	go monitorObservationIdle(ctx, rt)
 	ready = true
 	return rt, nil
+}
+
+func observationIdleThreshold() time.Duration {
+	seconds, err := strconv.Atoi(os.Getenv("CRAFTLANE_OBSERVATION_IDLE_SECONDS"))
+	if err != nil || seconds <= 0 {
+		seconds = 30
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func monitorObservationIdle(ctx context.Context, rt *Runtime) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rt.done:
+			return
+		case now := <-ticker.C:
+			_, _ = rt.Reducer.InferIdle(now.UTC(), observationIdleThreshold())
+		}
+	}
 }
 
 func monitorProjectChanges(ctx context.Context, rt *Runtime) {

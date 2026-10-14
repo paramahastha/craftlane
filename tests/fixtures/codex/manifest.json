@@ -1,0 +1,7 @@
+{
+  "provider": "codex",
+  "fixtureId": "codex-session-001",
+  "projectRoot": "{{PROJECT_ROOT}}",
+  "credentialCanary": "Bearer codex-fixture-only",
+  "events": ["session.started", "tool.completed", "session.ended"]
+}

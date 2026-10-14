@@ -1,7 +1,11 @@
 import type { Diagnostic, Project, Runtime } from './client';
 
 export type EventEnvelope = { schemaVersion: number; eventId: string; sequence: number; timestamp: string; projectId: string; source: { name: string; adapterVersion?: string }; type: string; payload: Record<string, unknown> };
-export type Snapshot = { sequence: number; project: Project; runtime: Runtime; diagnostics: Diagnostic[] };
+export type AgentState = 'working' | 'waiting' | 'waiting_permission' | 'idle' | 'completed' | 'failed' | 'unknown';
+export type ToolActivity = { id?: string; name: string; state: string; outcome?: string };
+export type Agent = { id: string; provider: string; projectId: string; sessionId?: string; displayName: string; parentAgentId?: string; state: AgentState; stateSource: 'reported' | 'inferred'; currentTool?: ToolActivity; task?: string; lastObservedAt: string; reportedAt?: string; priorHistoryUnavailable?: boolean; staleAfterRestart?: boolean };
+export type ProviderStatus = { provider: string; setupState: string; capabilities?: Record<string, { status: string; reason?: string }>; detail?: string; action?: string; adapterVersion?: string };
+export type Snapshot = { sequence: number; project: Project; runtime: Runtime; diagnostics: Diagnostic[]; agents?: Agent[]; providerStatuses?: ProviderStatus[] };
 type Message = { type: 'snapshot'; cursor: number; snapshot: Snapshot } | { type: 'event'; event: EventEnvelope } | { type: 'resync_required'; cursor: number } | { type: 'heartbeat'; cursor: number } | { type: 'error'; message: string };
 const cursorKey = 'craftlane.events.v1.cursor';
 

@@ -7,20 +7,24 @@ import (
 	"github.com/craftlane/craftlane/internal/protocol"
 	"github.com/craftlane/craftlane/internal/storage"
 	"os"
+	"sort"
 	"sync"
 	"time"
 )
 
 type Reducer struct {
-	mu          sync.Mutex
-	Store       storage.Store
-	Project     protocol.Project
-	Runtime     protocol.Runtime
-	Events      []protocol.Event
-	Sequence    uint64
-	Retention   int
-	Hub         *Hub
-	diagnostics []protocol.DiagnosticCheck
+	mu               sync.Mutex
+	Store            storage.Store
+	Project          protocol.Project
+	Runtime          protocol.Runtime
+	Events           []protocol.Event
+	Sequence         uint64
+	Retention        int
+	Hub              *Hub
+	diagnostics      []protocol.DiagnosticCheck
+	agents           map[string]protocol.Agent
+	providerStatuses []protocol.ProviderStatus
+	fingerprints     []string
 }
 
 func NewReducer(s storage.Store, p protocol.Project, r protocol.Runtime) *Reducer {
@@ -28,8 +32,21 @@ func NewReducer(s storage.Store, p protocol.Project, r protocol.Runtime) *Reduce
 }
 
 func NewReducerWithRetention(s storage.Store, p protocol.Project, runtime protocol.Runtime, retention int) *Reducer {
-	r := &Reducer{Store: s, Project: p, Runtime: runtime, Retention: storage.NormalizeRetention(retention), Hub: NewHub(64)}
+	r := &Reducer{Store: s, Project: p, Runtime: runtime, Retention: storage.NormalizeRetention(retention), Hub: NewHub(64), agents: make(map[string]protocol.Agent)}
 	snapshot, snapshotErr := s.LoadSnapshot()
+	if snapshotErr == nil {
+		for _, agent := range snapshot.Agents {
+			agent.State = protocol.AgentUnknown
+			agent.StateSource = "reported"
+			agent.StaleAfterRestart = true
+			r.agents[agent.ID] = agent
+		}
+		r.providerStatuses = append([]protocol.ProviderStatus(nil), snapshot.ProviderStatuses...)
+		r.diagnostics = append([]protocol.DiagnosticCheck(nil), snapshot.Diagnostics...)
+	}
+	if fingerprints, err := s.LoadObservationFingerprints(); err == nil {
+		r.fingerprints = fingerprints
+	}
 	if events, err := s.ReadEvents(); err == nil {
 		if snapshotErr == nil && len(events) > 0 && snapshot.Sequence < events[len(events)-1].Sequence {
 			_ = s.TruncateEventsAfter(snapshot.Sequence)
@@ -61,6 +78,10 @@ func id() (string, error) {
 func (r *Reducer) Append(typ string, payload map[string]any) (protocol.Event, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.appendLocked(typ, payload, protocol.EventSource{Name: "core"})
+}
+
+func (r *Reducer) appendLocked(typ string, payload map[string]any, source protocol.EventSource) (protocol.Event, error) {
 	eventID, err := id()
 	if err != nil {
 		return protocol.Event{}, err
@@ -71,7 +92,7 @@ func (r *Reducer) Append(typ string, payload map[string]any) (protocol.Event, er
 	}
 	previous := append([]protocol.Event(nil), r.Events...)
 	r.Sequence++
-	e := protocol.Event{SchemaVersion: 1, EventID: eventID, Sequence: r.Sequence, Timestamp: time.Now().UTC(), ProjectID: r.Project.ID, Source: protocol.EventSource{Name: "core"}, Type: typ, Payload: redacted}
+	e := protocol.Event{SchemaVersion: 1, EventID: eventID, Sequence: r.Sequence, Timestamp: time.Now().UTC(), ProjectID: r.Project.ID, Source: source, Type: typ, Payload: redacted}
 	r.Events = append(r.Events, e)
 	if err := r.Store.AppendEvent(e); err != nil {
 		r.Sequence--
@@ -98,7 +119,105 @@ func (r *Reducer) Snapshot() protocol.Snapshot {
 }
 
 func (r *Reducer) snapshotLocked() protocol.Snapshot {
-	return protocol.Snapshot{Sequence: r.Sequence, Project: r.Project, Runtime: r.Runtime, Diagnostics: append([]protocol.DiagnosticCheck(nil), r.diagnostics...)}
+	agents := make([]protocol.Agent, 0, len(r.agents))
+	for _, agent := range r.agents {
+		agents = append(agents, agent)
+	}
+	sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
+	return protocol.Snapshot{Sequence: r.Sequence, Project: r.Project, Runtime: r.Runtime, Diagnostics: append([]protocol.DiagnosticCheck(nil), r.diagnostics...), Agents: agents, ProviderStatuses: append([]protocol.ProviderStatus(nil), r.providerStatuses...)}
+}
+
+func (r *Reducer) SetProviderStatuses(statuses []protocol.ProviderStatus) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.providerStatuses = append([]protocol.ProviderStatus(nil), statuses...)
+	return r.Store.SaveSnapshot(r.snapshotLocked())
+}
+
+func (r *Reducer) Agents() []protocol.Agent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	snapshot := r.snapshotLocked()
+	return snapshot.Agents
+}
+
+func (r *Reducer) ApplyObservation(observation protocol.ObservationEnvelope, source protocol.EventSource) (protocol.Agent, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if observation.ProjectID != r.Project.ID {
+		return protocol.Agent{}, false, fmt.Errorf("observation project does not match runtime")
+	}
+	if observation.Provider == "" || observation.Kind == "" || (observation.AgentKey == "" && observation.SessionKey == "") {
+		return protocol.Agent{}, false, fmt.Errorf("invalid observation")
+	}
+	fingerprint := ObservationFingerprint(observation)
+	for _, item := range r.fingerprints {
+		if item == fingerprint {
+			return protocol.Agent{}, false, nil
+		}
+	}
+	id := ObservationAgentID(observation)
+	previous, existed := r.agents[id]
+	oldSnapshot := r.snapshotLocked()
+	agent, changed, err := applyObservation(previous, observation)
+	if err != nil {
+		return protocol.Agent{}, false, err
+	}
+	r.fingerprints = append(r.fingerprints, fingerprint)
+	if len(r.fingerprints) > storage.MinimumRetention {
+		r.fingerprints = r.fingerprints[len(r.fingerprints)-storage.MinimumRetention:]
+	}
+	if !changed {
+		if err := r.Store.SaveObservationFingerprints(r.fingerprints); err != nil {
+			return protocol.Agent{}, false, err
+		}
+		return previous, false, nil
+	}
+	r.agents[id] = agent
+	oldSequence, oldEvents, oldFingerprints := r.Sequence, r.Events, append([]string(nil), r.fingerprints...)
+	payload := map[string]any{"agent": agent}
+	if _, err := r.appendLocked("agent.updated", payload, source); err != nil {
+		r.Sequence, r.Events, r.fingerprints = oldSequence, oldEvents, oldFingerprints
+		if existed {
+			r.agents[id] = previous
+		} else {
+			delete(r.agents, id)
+		}
+		return protocol.Agent{}, false, err
+	}
+	if err := r.Store.SaveObservationFingerprints(r.fingerprints); err != nil {
+		_ = r.Store.RemoveEvent(r.Sequence)
+		r.Sequence, r.Events, r.fingerprints = oldSequence, oldEvents, oldFingerprints
+		if existed {
+			r.agents[id] = previous
+		} else {
+			delete(r.agents, id)
+		}
+		_ = r.Store.SaveSnapshot(oldSnapshot)
+		return protocol.Agent{}, false, err
+	}
+	return agent, true, nil
+}
+
+func (r *Reducer) InferIdle(now time.Time, threshold time.Duration) ([]protocol.Agent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if threshold <= 0 {
+		return nil, nil
+	}
+	var changed []protocol.Agent
+	for id, agent := range r.agents {
+		if (agent.State != protocol.AgentWorking && agent.State != protocol.AgentUnknown) || agent.LastObservedAt.IsZero() || now.Sub(agent.LastObservedAt) < threshold {
+			continue
+		}
+		agent.State, agent.StateSource = protocol.AgentIdle, "inferred"
+		r.agents[id] = agent
+		if _, err := r.appendLocked("agent.updated", map[string]any{"agent": agent}, protocol.EventSource{Name: agent.Provider}); err != nil {
+			return changed, err
+		}
+		changed = append(changed, agent)
+	}
+	return changed, nil
 }
 
 func (r *Reducer) SetDiagnostics(checks []protocol.DiagnosticCheck) error {
